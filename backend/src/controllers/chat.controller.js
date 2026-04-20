@@ -21,12 +21,16 @@
  *   data: { message, code }
  */
 
+import { Readable } from "node:stream";
+
 import { Chat } from "../models/chat.model.js";
+import { env } from "../config/env.js";
 import {
   MESSAGE_ROLES,
   SSE_EVENTS,
 } from "../config/constants.js";
 import {
+  generateAIResponse,
   mapMessagesToPython,
   streamAIResponse,
 } from "../services/ai.service.js";
@@ -256,6 +260,22 @@ export async function listChats(req, res) {
 }
 
 /**
+ * Shape a Mongo chat message subdocument into the richer payload the
+ * frontend expects (id, provider, model, createdAt — not just
+ * role/content like the Python-bound mapper).
+ */
+function mapMessagesForUI(messages = []) {
+  return messages.map((m) => ({
+    id: m._id?.toString?.() ?? null,
+    role: m.role,
+    content: m.content,
+    provider: m.provider ?? null,
+    model: m.model ?? null,
+    createdAt: m.createdAt ?? null,
+  }));
+}
+
+/**
  * GET /api/chat/:id — return a single chat's full history.
  */
 export async function getChat(req, res) {
@@ -269,7 +289,7 @@ export async function getChat(req, res) {
       id: chat._id.toString(),
       title: chat.title,
       active_pdf_id: chat.active_pdf_id,
-      messages: mapMessagesToPython(chat.messages),
+      messages: mapMessagesForUI(chat.messages),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
     },
@@ -306,6 +326,167 @@ export async function updateChat(req, res) {
       updatedAt: chat.updatedAt,
     },
   });
+}
+
+/**
+ * POST /api/chat/upload
+ *
+ * Thin multipart proxy to the Python AI service `POST /upload`.
+ * We forward the raw request body to Python — no in-process buffering —
+ * and relay the JSON response (or the upstream error) back to the
+ * client. On success we also remember the returned `vector_id` on the
+ * chat document (if `chatId` was supplied as a query string).
+ *
+ * Requires `verifyJWT` — see `chat.routes.js`.
+ */
+export async function uploadPdf(req, res) {
+  const contentType = req.headers["content-type"];
+  if (!contentType || !contentType.toLowerCase().startsWith("multipart/form-data")) {
+    throw ApiError.badRequest(
+      "Upload must be sent as multipart/form-data.",
+      { code: "UPLOAD_INVALID_CONTENT_TYPE" }
+    );
+  }
+
+  const chatId =
+    typeof req.query?.chatId === "string" && req.query.chatId.length > 0
+      ? req.query.chatId
+      : null;
+
+  let upstream;
+  try {
+    upstream = await fetch(`${env.aiService.url}/upload`, {
+      method: "POST",
+      headers: {
+        "Content-Type": contentType,
+        ...(req.headers["content-length"]
+          ? { "Content-Length": req.headers["content-length"] }
+          : {}),
+      },
+      body: Readable.toWeb(req),
+      duplex: "half",
+    });
+  } catch (err) {
+    throw ApiError.serviceUnavailable(
+      `AI service unreachable for upload: ${err?.message ?? err}`,
+      { code: "AI_SERVICE_UNREACHABLE" }
+    );
+  }
+
+  const contentTypeOut = upstream.headers.get("content-type") ?? "";
+  const payload = contentTypeOut.includes("application/json")
+    ? await upstream.json().catch(() => ({}))
+    : { detail: await upstream.text().catch(() => "") };
+
+  if (!upstream.ok) {
+    const detail = payload?.detail ?? payload?.message ?? "Upload failed upstream.";
+    throw new ApiError(upstream.status >= 500 ? 502 : upstream.status, detail, {
+      code: "AI_SERVICE_UPSTREAM_ERROR",
+    });
+  }
+
+  const vectorId = payload?.vector_id ?? null;
+
+  if (chatId && vectorId) {
+    try {
+      await Chat.updateOne(
+        { _id: chatId, userId: req.user._id },
+        { $set: { active_pdf_id: vectorId } }
+      );
+    } catch (err) {
+      // Non-fatal — the upload itself succeeded.
+      // eslint-disable-next-line no-console
+      console.warn("[chat.controller] failed to persist active_pdf_id:", err);
+    }
+  }
+
+  res.status(200).json({
+    status: "ok",
+    vector_id: vectorId,
+    filename: payload?.filename ?? null,
+    documents: payload?.documents ?? null,
+    chunks: payload?.chunks ?? null,
+    chatId,
+  });
+}
+
+/**
+ * POST /api/chat/title
+ *
+ * Generate a short (max ~4 words) human-friendly chat title from a
+ * seed user message. This endpoint does NOT persist anything — the
+ * frontend decides whether to PATCH the chat with the returned title.
+ *
+ * Body: `{ text: string, chatId?: string }`
+ *
+ * If `chatId` is supplied AND belongs to the caller, we also persist
+ * the generated title on the chat as a convenience. Otherwise we just
+ * return it.
+ */
+export async function generateChatTitle(req, res) {
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  if (!text) {
+    throw ApiError.badRequest("`text` is required.", {
+      code: "TITLE_TEXT_MISSING",
+    });
+  }
+  const chatId = typeof req.body?.chatId === "string" ? req.body.chatId : null;
+
+  const titlerMessages = [
+    {
+      role: MESSAGE_ROLES.SYSTEM,
+      content:
+        "You generate chat titles. Given a user's first message, reply " +
+        "with 3 to 5 words that capture the topic — NO quotes, NO trailing " +
+        "punctuation, NO prefix like 'Title:'. Just the words. Title Case.",
+    },
+    {
+      role: MESSAGE_ROLES.USER,
+      content: text.slice(0, 800),
+    },
+  ];
+
+  let title = "New chat";
+  try {
+    const ai = await generateAIResponse({ messages: titlerMessages });
+    const raw = typeof ai?.reply === "string" ? ai.reply : "";
+    title = cleanupTitle(raw) || title;
+  } catch (error) {
+    // Non-fatal — fall back to a sensible default derived from the text.
+    // eslint-disable-next-line no-console
+    console.warn("[chat.controller] title generation failed:", error?.message ?? error);
+    title = deriveTitle(text);
+  }
+
+  if (chatId) {
+    try {
+      await Chat.updateOne(
+        { _id: chatId, userId: req.user._id },
+        { $set: { title } }
+      );
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[chat.controller] failed to persist generated title:", err);
+    }
+  }
+
+  res.status(200).json({ status: "ok", title, chatId });
+}
+
+/**
+ * Normalise a title candidate returned by the LLM: strip surrounding
+ * quotes, trailing punctuation, clamp to a reasonable length.
+ */
+function cleanupTitle(raw) {
+  if (!raw) return "";
+  let t = raw.trim().split(/\r?\n/)[0].trim();
+  t = t.replace(/^["'`]+|["'`]+$/g, "");
+  t = t.replace(/^(title\s*:\s*)/i, "");
+  t = t.replace(/[.。!?！？\s]+$/u, "");
+  if (t.length > DEFAULT_CHAT_TITLE_MAX) {
+    t = `${t.slice(0, DEFAULT_CHAT_TITLE_MAX - 1).trimEnd()}…`;
+  }
+  return t;
 }
 
 /**
