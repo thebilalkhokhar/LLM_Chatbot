@@ -1,0 +1,22 @@
+# --- Web framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# --- LangChain / LangGraph ---
+langgraph==0.2.62
+langchain-core==0.3.29
+langchain-community==0.3.14
+langchain-text-splitters==0.3.5
+langchain-google-genai==2.0.8
+
+# --- RAG: PDF loader + FAISS vector store ---
+pypdf==5.1.0
+faiss-cpu==1.9.0.post1
+
+# --- File uploads (multipart/form-data) ---
+python-multipart==0.0.20
+
+# --- Utilities ---
+python-dotenv==1.0.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
