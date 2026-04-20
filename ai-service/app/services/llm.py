@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Sequence
+from typing import Iterator, Sequence
 
 from langchain_core.messages import AIMessage, BaseMessage
 
@@ -83,6 +83,60 @@ class LLMService:
         self._stamp_provider(message, "gemini", self.settings.gemini_model)
         logger.info("LLM reply served by gemini:%s", self.settings.gemini_model)
         return message
+
+    def stream(self, messages: Sequence[BaseMessage]) -> Iterator[str]:
+        """Stream Gemini's reply token-by-token.
+
+        Yields plain string chunks (the ``content`` of each
+        :class:`~langchain_core.messages.AIMessageChunk`). Raises
+        :class:`LLMUnavailableError` if the underlying client is not
+        initialized or the upstream call fails before any token is
+        emitted. If the stream fails *mid-flight*, the error is logged
+        and the generator simply stops — the consumer is responsible
+        for emitting a suitable "error" terminator in that case.
+        """
+        if self._client is None:
+            raise LLMUnavailableError("Gemini client is not initialized.")
+
+        logger.debug("Streaming Gemini (%s).", self.settings.gemini_model)
+        try:
+            stream_iter = self._client.stream(list(messages))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Gemini stream start failed (%s: %s).",
+                exc.__class__.__name__,
+                exc,
+            )
+            raise LLMUnavailableError(
+                f"Gemini stream failed to start: {exc.__class__.__name__}: {exc}"
+            ) from exc
+
+        try:
+            for chunk in stream_iter:
+                content = getattr(chunk, "content", "")
+                if isinstance(content, str) and content:
+                    yield content
+                elif isinstance(content, list):
+                    # Some providers return list-of-parts; flatten text parts.
+                    for part in content:
+                        text = (
+                            part.get("text") if isinstance(part, dict) else None
+                        )
+                        if isinstance(text, str) and text:
+                            yield text
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Gemini stream interrupted (%s: %s).",
+                exc.__class__.__name__,
+                exc,
+            )
+            raise LLMUnavailableError(
+                f"Gemini stream interrupted: {exc.__class__.__name__}: {exc}"
+            ) from exc
+
+        logger.info(
+            "LLM streamed reply served by gemini:%s", self.settings.gemini_model
+        )
 
     @staticmethod
     def _to_ai_message(response: BaseMessage | AIMessage) -> AIMessage:

@@ -4,18 +4,18 @@
  * Responsibilities:
  *   - Persist the user's message on the Chat document.
  *   - Forward the conversation to the Python AI service via the bridge.
- *   - Stream the response back to the frontend over Server-Sent Events.
- *   - On stream completion, persist the assistant message too.
+ *   - Stream Gemini's tokens back to the frontend over SSE as they arrive.
+ *   - On stream completion, persist the fully assembled assistant message.
  *
  * Wire protocol (SSE events sent to the frontend):
- *   event: reply
- *   data: { reply, provider, model, next_step }
+ *   event: start
+ *   data: { provider, model }
  *
- *   event: token                 (reserved for future per-token stream)
+ *   event: token
  *   data: { delta: "…" }
  *
  *   event: done
- *   data: { chatId, messageId }
+ *   data: { chatId, messageId, reply, provider, model, next_step }
  *
  *   event: error
  *   data: { message, code }
@@ -27,8 +27,8 @@ import {
   SSE_EVENTS,
 } from "../config/constants.js";
 import {
-  generateAIResponse,
   mapMessagesToPython,
+  streamAIResponse,
 } from "../services/ai.service.js";
 import { ApiError } from "../utils/ApiError.js";
 
@@ -124,9 +124,9 @@ export async function sendMessage(req, res) {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
-  let aiJson;
+  let upstream;
   try {
-    aiJson = await generateAIResponse({
+    upstream = await streamAIResponse({
       messages: chat.messages,
       context: userMessage.context,
       activePdfId: chat.active_pdf_id,
@@ -141,30 +141,92 @@ export async function sendMessage(req, res) {
     return;
   }
 
-  const replyText =
-    typeof aiJson?.reply === "string" ? aiJson.reply : JSON.stringify(aiJson);
-
-  writeSse(res, SSE_EVENTS.REPLY, {
-    reply: replyText,
-    provider: aiJson?.provider ?? null,
-    model: aiJson?.model ?? null,
-    next_step: aiJson?.next_step ?? null,
-  });
-
-  const assistantMessage = {
-    role: MESSAGE_ROLES.ASSISTANT,
-    content: replyText,
-    context: {},
-    provider: aiJson?.provider ?? null,
-    model: aiJson?.model ?? null,
+  // If the frontend goes away mid-stream, drop the upstream too so
+  // we don't keep generating tokens into the void.
+  const abortUpstream = () => {
+    try {
+      upstream.stream?.destroy?.();
+    } catch {
+      /* noop */
+    }
   };
-  chat.messages.push(assistantMessage);
-  await chat.save();
+  req.on("close", abortUpstream);
 
-  const persisted = chat.messages[chat.messages.length - 1];
+  let assembledReply = "";
+  let provider = null;
+  let model = null;
+  let nextStep = null;
+  let receivedError = false;
+
+  try {
+    for await (const chunk of upstream) {
+      if (chunk?.event === "start") {
+        provider = chunk.provider ?? provider;
+        model = chunk.model ?? model;
+        writeSse(res, SSE_EVENTS.START, { provider, model });
+        continue;
+      }
+
+      if (typeof chunk?.token === "string") {
+        assembledReply += chunk.token;
+        writeSse(res, SSE_EVENTS.TOKEN, { delta: chunk.token });
+        continue;
+      }
+
+      if (chunk?.event === "done") {
+        nextStep = chunk.next_step ?? null;
+        continue;
+      }
+
+      if (chunk?.event === "error") {
+        receivedError = true;
+        writeSse(res, SSE_EVENTS.ERROR, {
+          message: chunk.message ?? "AI service failed mid-stream.",
+          code: "AI_SERVICE_STREAM_ERROR",
+          statusCode: 502,
+        });
+        break;
+      }
+    }
+  } catch (error) {
+    receivedError = true;
+    writeSse(res, SSE_EVENTS.ERROR, {
+      message: error?.message ?? "AI stream interrupted.",
+      code: error?.code ?? "AI_SERVICE_STREAM_ERROR",
+      statusCode: error?.statusCode ?? 502,
+    });
+  } finally {
+    req.off("close", abortUpstream);
+  }
+
+  if (receivedError) {
+    res.end();
+    return;
+  }
+
+  // Only persist the assistant turn when we actually got content.
+  let persistedId = null;
+  if (assembledReply.length > 0) {
+    const assistantMessage = {
+      role: MESSAGE_ROLES.ASSISTANT,
+      content: assembledReply,
+      context: {},
+      provider,
+      model,
+    };
+    chat.messages.push(assistantMessage);
+    await chat.save();
+    const persisted = chat.messages[chat.messages.length - 1];
+    persistedId = persisted?._id?.toString?.() ?? null;
+  }
+
   writeSse(res, SSE_EVENTS.DONE, {
     chatId: chat.id,
-    messageId: persisted?._id?.toString?.() ?? null,
+    messageId: persistedId,
+    reply: assembledReply,
+    provider,
+    model,
+    next_step: nextStep,
   });
   res.end();
 }

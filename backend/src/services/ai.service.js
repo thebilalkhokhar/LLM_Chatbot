@@ -23,6 +23,7 @@ import { MESSAGE_ROLES } from "../config/constants.js";
 import { ApiError } from "../utils/ApiError.js";
 
 const AI_CHAT_URL = `${env.aiService.url}/chat`;
+const AI_CHAT_STREAM_URL = `${env.aiService.url}/chat/stream`;
 
 /**
  * Convert internal DB messages to the Python schema.
@@ -145,9 +146,18 @@ export async function generateAIResponse({
 }
 
 /**
- * Streaming call — returns the axios response so the controller can
- * pipe `response.data` into an SSE frame per chunk.
- * The caller is responsible for terminating the outbound response.
+ * Streaming call — opens the Python `/chat/stream` endpoint and returns
+ * an async iterator that yields **parsed NDJSON objects** as they arrive.
+ *
+ * The Python side emits one JSON object per line, e.g.:
+ *   { "event": "start",  "provider": "gemini", "model": "gemini-2.5-flash" }
+ *   { "token": "Hello" }
+ *   { "token": " world" }
+ *   { "event": "done",   "next_step": "END" }
+ *   { "event": "error",  "message": "..." }        // terminal on failure
+ *
+ * The caller is responsible for translating these into the SSE frames
+ * the frontend expects.
  */
 export async function streamAIResponse({
   messages,
@@ -158,17 +168,72 @@ export async function streamAIResponse({
 
   const response = await callWithRetry({
     method: "POST",
-    url: AI_CHAT_URL,
+    url: AI_CHAT_STREAM_URL,
     data: payload,
     responseType: "stream",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    timeout: env.aiService.timeoutMs,
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/x-ndjson",
+    },
+    // Token streams can be long; disable the per-call timeout.
+    timeout: 0,
   });
 
-  return response;
+  return {
+    headers: response.headers,
+    status: response.status,
+    stream: response.data,
+    [Symbol.asyncIterator]() {
+      return iterateNdjson(response.data);
+    },
+  };
+}
+
+/**
+ * Consume a Node.js Readable stream of UTF-8 NDJSON and yield each
+ * parsed JSON object.
+ *
+ * - Buffers partial lines across chunk boundaries.
+ * - Skips blank lines and lines that fail to parse (logged as a warn).
+ *
+ * @param {NodeJS.ReadableStream} stream
+ * @returns {AsyncGenerator<object>}
+ */
+export async function* iterateNdjson(stream) {
+  stream.setEncoding("utf8");
+
+  let buffer = "";
+  for await (const chunk of stream) {
+    buffer += chunk;
+    let newlineIdx = buffer.indexOf("\n");
+    while (newlineIdx !== -1) {
+      const rawLine = buffer.slice(0, newlineIdx).trim();
+      buffer = buffer.slice(newlineIdx + 1);
+      if (rawLine.length > 0) {
+        try {
+          yield JSON.parse(rawLine);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("[ai.service] skipping malformed NDJSON line:", rawLine);
+        }
+      }
+      newlineIdx = buffer.indexOf("\n");
+    }
+  }
+
+  const tail = buffer.trim();
+  if (tail.length > 0) {
+    try {
+      yield JSON.parse(tail);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[ai.service] skipping malformed NDJSON tail:", tail);
+    }
+  }
 }
 
 export const aiServiceConfig = Object.freeze({
   url: env.aiService.url,
   chatUrl: AI_CHAT_URL,
+  chatStreamUrl: AI_CHAT_STREAM_URL,
 });

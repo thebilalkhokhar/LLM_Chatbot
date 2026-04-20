@@ -22,8 +22,12 @@ logger = logging.getLogger(__name__)
 _MAX_CONTEXT_CHARS = 6000  # safety cap so we never blow past LLM context limits
 
 
-def _build_rag_system_message(context: dict[str, Any]) -> SystemMessage | None:
-    """Build a grounded-answer system message from retrieved chunks."""
+def build_rag_system_message(context: dict[str, Any]) -> SystemMessage | None:
+    """Build a grounded-answer system message from retrieved chunks.
+
+    Public so that the streaming chat service can reuse the exact same
+    prompt the non-streaming graph node uses.
+    """
     chunks = context.get("retrieved_chunks") or []
     if not chunks:
         return None
@@ -73,7 +77,7 @@ def chat_node(state: AgentState) -> dict[str, Any]:
         }
 
     context = state.get("context") or {}
-    rag_system = _build_rag_system_message(context)
+    rag_system = build_rag_system_message(context)
     if rag_system is not None:
         logger.debug("chat_node: injecting RAG context into system prompt.")
         messages = [rag_system, *messages]
@@ -83,11 +87,30 @@ def chat_node(state: AgentState) -> dict[str, Any]:
         reply = llm.invoke(messages)
     except LLMUnavailableError as exc:
         logger.error("LLM unavailable: %s", exc)
-        reply = AIMessage(
-            content=(
-                "I'm temporarily unable to reach any language model. "
-                "Please try again shortly."
-            )
-        )
+        reply = AIMessage(content=_format_unavailable_message(exc))
 
     return {"messages": [reply], "next_step": "END"}
+
+
+def _format_unavailable_message(exc: Exception) -> str:
+    """Translate a raw LLM failure into a user-facing reason string."""
+    lowered = f"{exc.__class__.__name__}: {exc}".lower()
+    if (
+        "resourceexhausted" in lowered
+        or "quota" in lowered
+        or "429" in lowered
+        or "rate limit" in lowered
+    ):
+        return (
+            "Gemini's free-tier quota is exhausted for the day. "
+            "Please retry after the quota resets or upgrade your plan."
+        )
+    if "api key" in lowered or "api_key_invalid" in lowered or "401" in lowered:
+        return (
+            "Gemini rejected the API key. Check GEMINI_API_KEY in "
+            "ai-service/.env."
+        )
+    return (
+        "I'm temporarily unable to reach the language model. "
+        "Please try again shortly."
+    )

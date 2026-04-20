@@ -10,10 +10,11 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from app.core.config import get_settings
 from app.schemas.chat_schema import ChatRequest, ChatResponse
-from app.services.chat_service import ChatServiceError, process_chat
+from app.services.chat_service import ChatServiceError, process_chat, stream_chat
 
 logger = logging.getLogger(__name__)
 
@@ -42,3 +43,34 @@ def chat(req: ChatRequest) -> ChatResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal error while processing the request.",
         ) from exc
+
+
+@router.post(
+    "/chat/stream",
+    tags=["chat"],
+    summary="Run one chat turn and stream Gemini tokens as NDJSON.",
+    responses={
+        200: {
+            "description": (
+                "Newline-delimited JSON stream. One JSON object per line. "
+                "Event types: `start`, `token`, `done`, `error`."
+            ),
+            "content": {"application/x-ndjson": {}},
+        }
+    },
+)
+def chat_stream(req: ChatRequest) -> StreamingResponse:
+    """Stream the assistant reply token-by-token.
+
+    The response body is ``application/x-ndjson`` (newline-delimited
+    JSON). Each line is a standalone JSON object — the Node gateway
+    parses these lines and re-emits them to the browser as SSE events.
+    """
+    return StreamingResponse(
+        stream_chat(req),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )

@@ -18,6 +18,7 @@ export const MESSAGE_ROLE_VALUES = Object.freeze(Object.values(MESSAGE_ROLES));
 export const REFRESH_COOKIE_NAME = "refreshToken";
 
 export const SSE_EVENTS = Object.freeze({
+  START: "start",
   REPLY: "reply",
   TOKEN: "token",
   ERROR: "error",
