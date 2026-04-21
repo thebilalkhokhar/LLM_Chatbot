@@ -32,3 +32,5 @@ Thumbs.db
 # --- Service runtime artifacts ---
 ai-service/storage/
 *.log
+
+storage
