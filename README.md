@@ -262,19 +262,3 @@ frontend/src/
 
 ---
 
-## Roadmap / known follow-ups
-
-- Re-introduce tool-use (web search, calculator, stock price) behind
-  `model.bind_tools` — previously present in a standalone prototype,
-  not yet ported into the FastAPI graph.
-- Hugging Face fallback provider (deferred — currently Gemini-only).
-- Persist the original PDF filename on the chat document (today a
-  reloaded thread shows "Attached document" as the badge label).
-- Replace `window.confirm` for delete with a design-system dialog.
-- E2E test harness (Playwright) over the streaming flow.
-
----
-
-## License
-
-Private / unlicensed — see the project owner.
