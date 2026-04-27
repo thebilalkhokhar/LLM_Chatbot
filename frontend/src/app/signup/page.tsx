@@ -4,11 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { AxiosError } from "axios";
-import { Loader2, Sparkles, UserPlus } from "lucide-react";
+import { Loader2, UserPlus } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Label } from "@/components/ui/Label";
+import { Logo } from "@/components/ui/Logo";
 import { useAuth } from "@/context/AuthContext";
 import { EMAIL_REGEX } from "@/lib/utils";
 
@@ -70,7 +71,7 @@ export default function SignupPage() {
 
       <div className="relative z-10 w-full max-w-md">
         <div className="mb-6 flex items-center justify-center gap-2 text-[var(--color-fg-muted)]">
-          <Sparkles className="h-5 w-5 text-[var(--color-accent)]" />
+          <Logo size="md" aria-label="AI Gateway logo" />
           <span className="text-sm font-medium tracking-wide">AI Gateway</span>
         </div>
 

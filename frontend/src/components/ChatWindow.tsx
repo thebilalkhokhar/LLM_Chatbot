@@ -18,6 +18,7 @@ import {
 
 import { Button } from "@/components/ui/Button";
 import { FileUpload, type UploadResult } from "@/components/FileUpload";
+import { Logo } from "@/components/ui/Logo";
 import { MessageBubble } from "@/components/MessageBubble";
 import { cn } from "@/lib/utils";
 import type { EngineId, Message } from "@/types";
@@ -120,7 +121,7 @@ export function ChatWindow({
     <section className="flex min-h-0 flex-1 flex-col bg-[var(--color-bg)]">
       <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3.5 sm:px-6">
         <div className="flex min-w-0 items-center gap-2">
-          <Sparkles className="h-4 w-4 shrink-0 text-[var(--color-accent)]" />
+          <Logo size="sm" aria-label="AI Gateway" />
           <h2 className="truncate text-sm font-medium text-[var(--color-fg)]">
             {title}
           </h2>
@@ -302,9 +303,7 @@ function EmptyState({
 
   return (
     <div className="mx-auto flex h-full w-full max-w-2xl flex-col items-center justify-center gap-6 px-6 py-10 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]">
-        <Sparkles className="h-5 w-5 text-[var(--color-accent)]" />
-      </div>
+      <Logo size="xl" aria-label="AI Gateway" />
       <div className="space-y-1.5">
         <h3 className="text-xl font-semibold text-[var(--color-fg)]">
           How can I help you today?

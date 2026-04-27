@@ -8,7 +8,6 @@ import {
   Pencil,
   Plus,
   Search,
-  Sparkles,
   Trash2,
   User as UserIcon,
   X,
@@ -26,6 +25,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { EngineToggle } from "@/components/EngineToggle";
 import { Input } from "@/components/ui/Input";
+import { Logo } from "@/components/ui/Logo";
 import { useAuth } from "@/context/AuthContext";
 import { cn, formatTime } from "@/lib/utils";
 import type { ChatSummary, EngineId } from "@/types";
@@ -100,7 +100,7 @@ export function Sidebar({
     <aside className="flex h-full w-72 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-subtle)]">
       <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-4 py-3.5">
         <div className="flex items-center gap-2 text-[var(--color-fg)]">
-          <Sparkles className="h-4 w-4 text-[var(--color-accent)]" />
+          <Logo size="sm" aria-label="AI Gateway logo" />
           <span className="text-sm font-medium tracking-wide">AI Gateway</span>
         </div>
         <Button
