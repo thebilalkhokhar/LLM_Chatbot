@@ -26,6 +26,13 @@ const chatSchema = new Schema(
       default: "New Chat",
       maxlength: 200,
     },
+    // Set to `true` once the user manually renames the chat. Locked
+    // titles are protected from the LLM-driven auto-titler that fires
+    // after the first message of a new thread.
+    titleLocked: {
+      type: Boolean,
+      default: false,
+    },
     messages: {
       type: [messageSchema],
       default: () => [],

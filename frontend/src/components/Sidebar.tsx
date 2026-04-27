@@ -1,16 +1,27 @@
 "use client";
 
 import {
+  Check,
   ChevronUp,
   LogOut,
   MessageSquarePlus,
+  Pencil,
   Plus,
   Search,
   Sparkles,
   Trash2,
   User as UserIcon,
+  X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 import { Button } from "@/components/ui/Button";
 import { EngineToggle } from "@/components/EngineToggle";
@@ -28,6 +39,12 @@ interface SidebarProps {
   onNewChat: () => void;
   /** Optional — right-click / menu entry to delete a chat. */
   onDeleteChat?: (chatId: string) => void;
+  /**
+   * Optional — commit a new title for a chat. The page is responsible
+   * for the optimistic UI update and the actual API call. The Sidebar
+   * only manages the inline-edit interaction.
+   */
+  onRenameChat?: (chatId: string, nextTitle: string) => void | Promise<void>;
   /** Active LLM toggle (Groq by default, Gemini when toggled). */
   engine: EngineId;
   onEngineChange: (next: EngineId) => void;
@@ -42,18 +59,42 @@ export function Sidebar({
   onSelectChat,
   onNewChat,
   onDeleteChat,
+  onRenameChat,
   engine,
   onEngineChange,
   engineLocked = false,
 }: SidebarProps) {
   const { user, logout } = useAuth();
   const [query, setQuery] = useState("");
+  const [editingChatId, setEditingChatId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return chats;
     return chats.filter((c) => (c.title ?? "").toLowerCase().includes(q));
   }, [chats, query]);
+
+  const handleStartEdit = useCallback((chatId: string) => {
+    setEditingChatId(chatId);
+  }, []);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingChatId(null);
+  }, []);
+
+  const handleCommitRename = useCallback(
+    async (chatId: string, nextTitle: string) => {
+      setEditingChatId(null);
+      if (!onRenameChat) return;
+      const trimmed = nextTitle.trim();
+      // Empty input → caller keeps the original title (no-op).
+      if (!trimmed) return;
+      const original = chats.find((c) => c.id === chatId)?.title ?? "";
+      if (trimmed === original.trim()) return;
+      await onRenameChat(chatId, trimmed);
+    },
+    [chats, onRenameChat]
+  );
 
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-subtle)]">
@@ -105,50 +146,20 @@ export function Sidebar({
           </div>
         ) : (
           <ul className="space-y-0.5">
-            {filtered.map((chat) => {
-              const active = chat.id === activeChatId;
-              return (
-                <li key={chat.id} className="group/row relative">
-                  <button
-                    type="button"
-                    onClick={() => onSelectChat(chat.id)}
-                    className={cn(
-                      "flex w-full flex-col gap-0.5 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors",
-                      active
-                        ? "bg-[var(--color-surface)] text-[var(--color-fg)]"
-                        : "text-[var(--color-fg-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-fg)]"
-                    )}
-                  >
-                    <span className="truncate pr-7 text-sm font-medium">
-                      {chat.title || "Untitled chat"}
-                    </span>
-                    <span className="truncate text-[11px] text-[var(--color-fg-subtle)]">
-                      {formatTime(chat.updatedAt ?? chat.createdAt)}
-                      {chat.active_pdf_id ? " · PDF attached" : ""}
-                    </span>
-                  </button>
-                  {onDeleteChat ? (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteChat(chat.id);
-                      }}
-                      aria-label="Delete chat"
-                      title="Delete chat"
-                      className={cn(
-                        "absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--color-fg-subtle)] opacity-0 transition-opacity",
-                        "hover:bg-[var(--color-bg)] hover:text-[var(--color-danger)]",
-                        "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]",
-                        "group-hover/row:opacity-100"
-                      )}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  ) : null}
-                </li>
-              );
-            })}
+            {filtered.map((chat) => (
+              <ChatRow
+                key={chat.id}
+                chat={chat}
+                active={chat.id === activeChatId}
+                editing={editingChatId === chat.id}
+                canEdit={Boolean(onRenameChat)}
+                onSelect={onSelectChat}
+                onDelete={onDeleteChat}
+                onStartEdit={handleStartEdit}
+                onCancelEdit={handleCancelEdit}
+                onCommitRename={handleCommitRename}
+              />
+            ))}
           </ul>
         )}
       </nav>
@@ -181,6 +192,263 @@ export function Sidebar({
         />
       </div>
     </aside>
+  );
+}
+
+// ----------------------------------------------------------------- //
+// Chat row (memoized — high-frequency renders during streaming).
+// ----------------------------------------------------------------- //
+
+interface ChatRowProps {
+  chat: ChatSummary;
+  active: boolean;
+  editing: boolean;
+  canEdit: boolean;
+  onSelect: (chatId: string) => void;
+  onDelete?: (chatId: string) => void;
+  onStartEdit: (chatId: string) => void;
+  onCancelEdit: () => void;
+  onCommitRename: (chatId: string, nextTitle: string) => void | Promise<void>;
+}
+
+const ChatRow = memo(function ChatRow({
+  chat,
+  active,
+  editing,
+  canEdit,
+  onSelect,
+  onDelete,
+  onStartEdit,
+  onCancelEdit,
+  onCommitRename,
+}: ChatRowProps) {
+  const handleSelect = useCallback(() => {
+    if (editing) return;
+    onSelect(chat.id);
+  }, [chat.id, editing, onSelect]);
+
+  const handleStartEdit = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onStartEdit(chat.id);
+    },
+    [chat.id, onStartEdit]
+  );
+
+  const handleDelete = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onDelete?.(chat.id);
+    },
+    [chat.id, onDelete]
+  );
+
+  const handleCommit = useCallback(
+    (nextTitle: string) => {
+      void onCommitRename(chat.id, nextTitle);
+    },
+    [chat.id, onCommitRename]
+  );
+
+  return (
+    <li className="group/row relative">
+      {editing ? (
+        <ChatRowEditor
+          initialTitle={chat.title || ""}
+          onCommit={handleCommit}
+          onCancel={onCancelEdit}
+        />
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={handleSelect}
+            onDoubleClick={canEdit ? handleStartEdit : undefined}
+            className={cn(
+              "flex w-full flex-col gap-0.5 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors",
+              active
+                ? "bg-[var(--color-surface)] text-[var(--color-fg)]"
+                : "text-[var(--color-fg-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-fg)]"
+            )}
+          >
+            <span
+              className={cn(
+                "truncate text-sm font-medium",
+                // Reserve space for the action buttons that fade in on hover.
+                active && (canEdit || onDelete) ? "pr-14" : "pr-7"
+              )}
+            >
+              {chat.title || "Untitled chat"}
+            </span>
+            <span className="truncate text-[11px] text-[var(--color-fg-subtle)]">
+              {formatTime(chat.updatedAt ?? chat.createdAt)}
+              {chat.active_pdf_id ? " · PDF attached" : ""}
+            </span>
+          </button>
+
+          <div
+            className={cn(
+              "absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5",
+              // Active row keeps actions visible; others fade in on hover.
+              active
+                ? "opacity-100"
+                : "opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100"
+            )}
+          >
+            {canEdit ? (
+              <button
+                type="button"
+                onClick={handleStartEdit}
+                aria-label="Rename chat"
+                title="Rename chat"
+                className={cn(
+                  "rounded p-1 text-[var(--color-fg-subtle)]",
+                  "hover:bg-[var(--color-bg)] hover:text-[var(--color-accent)]",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]"
+                )}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            {onDelete ? (
+              <button
+                type="button"
+                onClick={handleDelete}
+                aria-label="Delete chat"
+                title="Delete chat"
+                className={cn(
+                  "rounded p-1 text-[var(--color-fg-subtle)]",
+                  "hover:bg-[var(--color-bg)] hover:text-[var(--color-danger)]",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]"
+                )}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+        </>
+      )}
+    </li>
+  );
+});
+
+// ----------------------------------------------------------------- //
+// Inline-edit input (Enter to save, Escape to cancel, blur to save).
+// ----------------------------------------------------------------- //
+
+interface ChatRowEditorProps {
+  initialTitle: string;
+  onCommit: (nextTitle: string) => void;
+  onCancel: () => void;
+}
+
+function ChatRowEditor({ initialTitle, onCommit, onCancel }: ChatRowEditorProps) {
+  const [value, setValue] = useState(initialTitle);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Tracks whether commit/cancel was already triggered via keyboard or
+  // button — prevents the blur handler from firing a second commit.
+  const settledRef = useRef(false);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, []);
+
+  const commit = useCallback(() => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    onCommit(value);
+  }, [onCommit, value]);
+
+  const cancel = useCallback(() => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    onCancel();
+  }, [onCancel]);
+
+  const handleKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commit();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancel();
+      }
+    },
+    [commit, cancel]
+  );
+
+  const handleSaveClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      commit();
+    },
+    [commit]
+  );
+
+  const handleCancelClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      cancel();
+    },
+    [cancel]
+  );
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-1 rounded-[var(--radius-md)] border border-[var(--color-accent)]/40 bg-[var(--color-surface)] px-2 py-1.5",
+        "shadow-[0_0_0_1px_var(--color-accent)]/20"
+      )}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <input
+        ref={inputRef}
+        type="text"
+        value={value}
+        maxLength={200}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={handleKeyDown}
+        onBlur={commit}
+        className={cn(
+          "min-w-0 flex-1 bg-transparent text-sm text-[var(--color-fg)]",
+          "outline-none placeholder:text-[var(--color-fg-subtle)]"
+        )}
+        placeholder="Chat title"
+        aria-label="Chat title"
+      />
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={handleSaveClick}
+        aria-label="Save title"
+        title="Save (Enter)"
+        className={cn(
+          "rounded p-1 text-[var(--color-accent)]",
+          "hover:bg-[var(--color-accent)]/15",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]"
+        )}
+      >
+        <Check className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={handleCancelClick}
+        aria-label="Cancel rename"
+        title="Cancel (Esc)"
+        className={cn(
+          "rounded p-1 text-[var(--color-fg-subtle)]",
+          "hover:bg-[var(--color-bg)] hover:text-[var(--color-fg)]",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]"
+        )}
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
   );
 }
 

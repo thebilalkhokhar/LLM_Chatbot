@@ -30,6 +30,7 @@ import {
   generateChatTitle,
   getChatById,
   listChats,
+  patchChatTitle,
 } from "@/services/chat.service";
 import { DEFAULT_ENGINE, type ChatSummary, type EngineId, type Message } from "@/types";
 
@@ -74,6 +75,11 @@ export default function ChatPage() {
   // current thread.
   const latestUserContentRef = useRef<string>("");
 
+  // Chat IDs whose title was manually edited in this session. The
+  // auto-titler skips these even if `needsTitleRef` says it should run
+  // (e.g. user renamed before the first stream finished).
+  const manuallyTitledRef = useRef<Set<string>>(new Set());
+
   // ----------------------------------------------------------- //
   // Initial thread list
   // ----------------------------------------------------------- //
@@ -83,7 +89,14 @@ export default function ChatPage() {
     (async () => {
       try {
         const list = await listChats();
-        if (!cancelled) setChats(list);
+        if (!cancelled) {
+          setChats(list);
+          // Seed the manual-rename set from server state so locked
+          // threads survive a page refresh.
+          for (const c of list) {
+            if (c.titleLocked) manuallyTitledRef.current.add(c.id);
+          }
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn("[chat] failed to load threads:", err);
@@ -136,10 +149,16 @@ export default function ChatPage() {
         ];
       });
 
-      // Auto-title: first turn on a brand-new thread.
-      if (needsTitleRef.current) {
+      // Auto-title: first turn on a brand-new thread, but only if the
+      // user hasn't already renamed it manually in the meantime.
+      if (
+        needsTitleRef.current &&
+        !manuallyTitledRef.current.has(meta.chatId as string)
+      ) {
         needsTitleRef.current = false;
         void autoTitle(meta.chatId as string);
+      } else {
+        needsTitleRef.current = false;
       }
     },
     [activePdf]
@@ -151,6 +170,9 @@ export default function ChatPage() {
     try {
       const title = await generateChatTitle(seed, chatId);
       if (!title) return;
+      // Race guard: a rename may have landed while the titler was
+      // running. If so, drop the generated title on the floor.
+      if (manuallyTitledRef.current.has(chatId)) return;
       setChats((prev) =>
         prev.map((c) => (c.id === chatId ? { ...c, title } : c))
       );
@@ -255,10 +277,17 @@ export default function ChatPage() {
         if (chat.title) {
           setChats((prev) =>
             prev.map((c) =>
-              c.id === chatId ? { ...c, title: chat.title ?? c.title } : c
+              c.id === chatId
+                ? {
+                    ...c,
+                    title: chat.title ?? c.title,
+                    titleLocked: chat.titleLocked ?? c.titleLocked,
+                  }
+                : c
             )
           );
         }
+        if (chat.titleLocked) manuallyTitledRef.current.add(chatId);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn("[chat] failed to load history:", err);
@@ -277,6 +306,7 @@ export default function ChatPage() {
       // Optimistic UI.
       const snapshot = chats;
       setChats((prev) => prev.filter((c) => c.id !== chatId));
+      manuallyTitledRef.current.delete(chatId);
       if (activeChatId === chatId) {
         cancel();
         clear();
@@ -293,6 +323,51 @@ export default function ChatPage() {
       }
     },
     [activeChatId, cancel, chats, clear]
+  );
+
+  const handleRenameChat = useCallback(
+    async (chatId: string, nextTitle: string) => {
+      const trimmed = nextTitle.trim();
+      // Empty input → silently revert to whatever the sidebar already shows.
+      if (!trimmed) return;
+
+      const previous = chats.find((c) => c.id === chatId)?.title ?? "";
+      if (trimmed === previous.trim()) return;
+
+      // Mark as user-edited so the auto-titler skips this thread.
+      manuallyTitledRef.current.add(chatId);
+
+      // Optimistic UI.
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId ? { ...c, title: trimmed, titleLocked: true } : c
+        )
+      );
+
+      try {
+        const updated = await patchChatTitle(chatId, trimmed);
+        // Sync with the canonical title returned by the server (in
+        // case the backend trimmed / clamped it).
+        if (updated?.title && updated.title !== trimmed) {
+          setChats((prev) =>
+            prev.map((c) =>
+              c.id === chatId ? { ...c, title: updated.title ?? c.title } : c
+            )
+          );
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[chat] failed to rename chat:", err);
+        // Roll back on failure.
+        manuallyTitledRef.current.delete(chatId);
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === chatId ? { ...c, title: previous, titleLocked: false } : c
+          )
+        );
+      }
+    },
+    [chats]
   );
 
   const handleUploaded = useCallback((result: UploadResult) => {
@@ -330,6 +405,7 @@ export default function ChatPage() {
           onSelectChat={handleSelectChat}
           onNewChat={handleNewChat}
           onDeleteChat={handleDeleteChat}
+          onRenameChat={handleRenameChat}
           engine={engine}
           onEngineChange={handleEngineChange}
           engineLocked={isStreaming}

@@ -12,6 +12,7 @@ import type { ChatSummary, Message } from "@/types";
 export interface ChatDetail {
   id: string;
   title: string;
+  titleLocked?: boolean;
   active_pdf_id?: string | null;
   messages: Message[];
   createdAt?: string;
@@ -30,13 +31,17 @@ interface GetChatResponse {
 
 interface PatchChatResponse {
   status: "ok";
-  chat: Pick<ChatSummary, "id" | "title" | "active_pdf_id" | "updatedAt">;
+  chat: Pick<ChatSummary, "id" | "title" | "active_pdf_id" | "updatedAt"> & {
+    titleLocked?: boolean;
+  };
 }
 
 interface TitleResponse {
   status: "ok";
   title: string;
   chatId: string | null;
+  /** True when the backend actually persisted the generated title. */
+  persisted?: boolean;
 }
 
 /** Fetch every chat thread for the current user (most-recent first). */
@@ -57,6 +62,27 @@ export async function patchChat(
   patch: { title?: string; active_pdf_id?: string | null }
 ): Promise<PatchChatResponse["chat"]> {
   const { data } = await apiClient.patch<PatchChatResponse>(`/chat/${id}`, patch);
+  return data.chat;
+}
+
+/**
+ * Manually rename a chat thread.
+ *
+ * Empty / whitespace-only titles are rejected client-side so we don't
+ * round-trip a request the backend will refuse.
+ */
+export async function patchChatTitle(
+  id: string,
+  title: string
+): Promise<PatchChatResponse["chat"]> {
+  const trimmed = title.trim();
+  if (!trimmed) {
+    throw new Error("Title cannot be empty.");
+  }
+  const { data } = await apiClient.patch<PatchChatResponse>(
+    `/chat/${id}/title`,
+    { title: trimmed }
+  );
   return data.chat;
 }
 

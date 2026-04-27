@@ -253,7 +253,7 @@ export async function sendMessage(req, res) {
  */
 export async function listChats(req, res) {
   const chats = await Chat.find({ userId: req.user._id })
-    .select("_id title active_pdf_id updatedAt createdAt")
+    .select("_id title titleLocked active_pdf_id updatedAt createdAt")
     .sort({ updatedAt: -1 })
     .lean();
 
@@ -262,6 +262,7 @@ export async function listChats(req, res) {
     chats: chats.map((c) => ({
       id: c._id.toString(),
       title: c.title,
+      titleLocked: Boolean(c.titleLocked),
       active_pdf_id: c.active_pdf_id,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
@@ -298,6 +299,7 @@ export async function getChat(req, res) {
     chat: {
       id: chat._id.toString(),
       title: chat.title,
+      titleLocked: Boolean(chat.titleLocked),
       active_pdf_id: chat.active_pdf_id,
       messages: mapMessagesForUI(chat.messages),
       createdAt: chat.createdAt,
@@ -308,10 +310,16 @@ export async function getChat(req, res) {
 
 /**
  * PATCH /api/chat/:id — update metadata (title / active_pdf_id).
+ *
+ * Setting `title` here also flags the thread as `titleLocked` so the
+ * LLM-driven auto-titler stops trying to rename it later.
  */
 export async function updateChat(req, res) {
   const updates = {};
-  if (typeof req.body?.title === "string") updates.title = req.body.title.trim();
+  if (typeof req.body?.title === "string") {
+    updates.title = req.body.title.trim();
+    updates.titleLocked = true;
+  }
   if (typeof req.body?.active_pdf_id === "string" || req.body?.active_pdf_id === null) {
     updates.active_pdf_id = req.body.active_pdf_id;
   }
@@ -332,6 +340,53 @@ export async function updateChat(req, res) {
     chat: {
       id: chat._id.toString(),
       title: chat.title,
+      active_pdf_id: chat.active_pdf_id,
+      titleLocked: chat.titleLocked,
+      updatedAt: chat.updatedAt,
+    },
+  });
+}
+
+/**
+ * PATCH /api/chat/:id/title — rename a chat thread.
+ *
+ * Body: `{ title: string }`
+ *
+ * - Trims the input, rejects empty strings (caller is expected to
+ *   revert to the previous title client-side).
+ * - Caps the length at `DEFAULT_CHAT_TITLE_MAX` to keep the sidebar
+ *   tidy.
+ * - Marks `titleLocked = true` so the auto-titler skips this thread.
+ */
+export async function updateChatTitle(req, res) {
+  const raw =
+    typeof req.body?.title === "string" ? req.body.title.trim() : "";
+  if (!raw) {
+    throw ApiError.badRequest("`title` must be a non-empty string.", {
+      code: "TITLE_EMPTY",
+    });
+  }
+
+  const title =
+    raw.length <= DEFAULT_CHAT_TITLE_MAX
+      ? raw
+      : `${raw.slice(0, DEFAULT_CHAT_TITLE_MAX - 1).trimEnd()}…`;
+
+  const chat = await Chat.findOneAndUpdate(
+    { _id: req.params.id, userId: req.user._id },
+    { $set: { title, titleLocked: true } },
+    { new: true }
+  ).lean();
+  if (!chat) {
+    throw ApiError.notFound("Chat not found.", { code: "CHAT_NOT_FOUND" });
+  }
+
+  res.status(200).json({
+    status: "ok",
+    chat: {
+      id: chat._id.toString(),
+      title: chat.title,
+      titleLocked: chat.titleLocked,
       active_pdf_id: chat.active_pdf_id,
       updatedAt: chat.updatedAt,
     },
@@ -468,19 +523,24 @@ export async function generateChatTitle(req, res) {
     title = deriveTitle(text);
   }
 
+  let persisted = false;
   if (chatId) {
     try {
-      await Chat.updateOne(
-        { _id: chatId, userId: req.user._id },
+      // Only update threads whose title is NOT user-locked. This prevents
+      // the auto-titler from clobbering a manual rename when the rename
+      // happens to land before the first stream finishes.
+      const result = await Chat.updateOne(
+        { _id: chatId, userId: req.user._id, titleLocked: { $ne: true } },
         { $set: { title } }
       );
+      persisted = result.modifiedCount > 0;
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn("[chat.controller] failed to persist generated title:", err);
     }
   }
 
-  res.status(200).json({ status: "ok", title, chatId });
+  res.status(200).json({ status: "ok", title, chatId, persisted });
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   listChats,
   sendMessage,
   updateChat,
+  updateChatTitle,
   uploadPdf,
 } from "../controllers/chat.controller.js";
 import { verifyJWT } from "../middleware/auth.middleware.js";
@@ -33,6 +34,8 @@ router.post("/title", asyncHandler(generateChatTitle));
 
 router.get("/:id", asyncHandler(getChat));
 router.patch("/:id", asyncHandler(updateChat));
+// Dedicated rename endpoint — keeps the contract crisp on the client.
+router.patch("/:id/title", asyncHandler(updateChatTitle));
 router.delete("/:id", asyncHandler(deleteChat));
 
 export default router;

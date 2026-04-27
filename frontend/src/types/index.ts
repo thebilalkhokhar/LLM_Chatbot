@@ -44,6 +44,8 @@ export interface Message {
 export interface ChatSummary {
   id: string;
   title: string;
+  /** True once the user has manually renamed the chat. */
+  titleLocked?: boolean;
   active_pdf_id?: string | null;
   createdAt?: string;
   updatedAt?: string;
