@@ -6,6 +6,7 @@ import {
   Sparkles,
   Square,
   X,
+  Zap,
 } from "lucide-react";
 import {
   useEffect,
@@ -19,7 +20,7 @@ import { Button } from "@/components/ui/Button";
 import { FileUpload, type UploadResult } from "@/components/FileUpload";
 import { MessageBubble } from "@/components/MessageBubble";
 import { cn } from "@/lib/utils";
-import type { Message } from "@/types";
+import type { EngineId, Message } from "@/types";
 
 interface ActivePdf {
   vectorId: string;
@@ -35,6 +36,8 @@ interface ChatWindowProps {
   isLoadingHistory?: boolean;
   activePdf?: ActivePdf | null;
   errorBanner?: string | null;
+  /** Active LLM toggle (used to render the "Powered by ..." badge). */
+  engine: EngineId;
   onSend: (content: string) => void | Promise<void>;
   onStop?: () => void;
   onUploaded: (result: UploadResult) => void;
@@ -50,6 +53,7 @@ export function ChatWindow({
   isLoadingHistory = false,
   activePdf = null,
   errorBanner = null,
+  engine,
   onSend,
   onStop,
   onUploaded,
@@ -120,6 +124,7 @@ export function ChatWindow({
           <h2 className="truncate text-sm font-medium text-[var(--color-fg)]">
             {title}
           </h2>
+          <PoweredByBadge engine={engine} />
         </div>
         <div className="flex items-center gap-2">
           {activePdf ? (
@@ -324,3 +329,32 @@ function EmptyState({
     </div>
   );
 }
+
+// ----------------------------------------------------------------- //
+// "Powered by Groq / Gemini" badge
+// ----------------------------------------------------------------- //
+
+function PoweredByBadge({ engine }: { engine: EngineId }) {
+  const isGroq = engine === "groq";
+  const Icon = isGroq ? Zap : Sparkles;
+  const label = isGroq ? "Powered by Groq" : "Powered by Gemini";
+  const colorClass = isGroq
+    ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
+    : "border-violet-500/30 bg-violet-500/10 text-violet-300";
+
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      title={label}
+      className={cn(
+        "hidden items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider sm:inline-flex",
+        colorClass
+      )}
+    >
+      <Icon className="h-3 w-3" aria-hidden />
+      {isGroq ? "Groq" : "Gemini"}
+    </span>
+  );
+}
+

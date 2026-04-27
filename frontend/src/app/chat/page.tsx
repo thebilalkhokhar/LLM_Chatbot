@@ -31,7 +31,7 @@ import {
   getChatById,
   listChats,
 } from "@/services/chat.service";
-import type { ChatSummary, Message } from "@/types";
+import { DEFAULT_ENGINE, type ChatSummary, type EngineId, type Message } from "@/types";
 
 interface ActivePdf {
   vectorId: string;
@@ -47,6 +47,23 @@ export default function ChatPage() {
   const [activePdf, setActivePdf] = useState<ActivePdf | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // LLM toggle. Defaults to Groq, but the user's last choice is
+  // restored from `sessionStorage` so it survives soft refreshes.
+  const [engine, setEngine] = useState<EngineId>(DEFAULT_ENGINE);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.sessionStorage.getItem("ai-gateway:engine");
+    if (stored === "groq" || stored === "gemini") {
+      setEngine(stored);
+    }
+  }, []);
+  const handleEngineChange = useCallback((next: EngineId) => {
+    setEngine(next);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("ai-gateway:engine", next);
+    }
+  }, []);
 
   // True when the next completed stream should trigger auto-titling.
   // Set to true when the user sends the first message on a new thread
@@ -156,6 +173,7 @@ export default function ChatPage() {
   } = useChat({
     chatId: activeChatId,
     activePdfId: activePdf?.vectorId ?? null,
+    engine,
     onDone: handleDone,
   });
 
@@ -312,6 +330,9 @@ export default function ChatPage() {
           onSelectChat={handleSelectChat}
           onNewChat={handleNewChat}
           onDeleteChat={handleDeleteChat}
+          engine={engine}
+          onEngineChange={handleEngineChange}
+          engineLocked={isStreaming}
         />
       </div>
 
@@ -339,6 +360,7 @@ export default function ChatPage() {
           isLoadingHistory={isLoadingHistory}
           activePdf={activePdf}
           errorBanner={errorBanner}
+          engine={engine}
           onSend={handleSend}
           onStop={cancel}
           onUploaded={handleUploaded}
@@ -358,8 +380,11 @@ function formatError(error: {
   if (error.statusCode === 401 || error.code === "UNAUTHORIZED") {
     return "Session expired. Please sign in again.";
   }
-  if (error.code === "GEMINI_QUOTA_EXHAUSTED") {
-    return "Gemini's free-tier quota is exhausted. Try again after it resets or switch the model.";
+  if (
+    error.code === "LLM_QUOTA_EXHAUSTED" ||
+    error.code === "GEMINI_QUOTA_EXHAUSTED"
+  ) {
+    return "All language-model providers are rate-limited right now. Please retry in a moment or switch the model engine.";
   }
   if (
     error.code === "AI_SERVICE_UNREACHABLE" ||

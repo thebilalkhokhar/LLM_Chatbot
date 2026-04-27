@@ -2,13 +2,22 @@
 
 Responsible for:
 
-* constructing an embedding function (Google Generative AI embeddings),
+* constructing an embedding function (local sentence-transformers
+  model — by default ``sentence-transformers/all-MiniLM-L6-v2``),
 * persisting FAISS indices to disk under ``storage/vectors/<store_id>/``,
 * loading them back on demand,
 * exposing a ``as_retriever`` helper for the retriever node.
 
 The manager intentionally knows nothing about PDFs or HTTP layers — it
 works on a list of :class:`~langchain_core.documents.Document` objects.
+
+Why local embeddings?
+    Google's hosted embedding models keep getting rotated/retired
+    (``embedding-001`` → ``text-embedding-004`` → ``gemini-embedding-001``…),
+    which silently breaks every persisted FAISS index. Switching to a
+    local sentence-transformers model gives us deterministic 384-d
+    vectors, zero API cost, and offline reproducibility once the model
+    is cached on disk (~90 MB the first time).
 """
 
 from __future__ import annotations
@@ -44,23 +53,36 @@ class VectorStoreManager:
     # Embeddings
     # ------------------------------------------------------------------ #
     def _build_embeddings(self):  # noqa: ANN202
-        """Build the Google Generative AI embedding function."""
-        if not self.settings.gemini_api_key:
-            raise VectorStoreError(
-                "GEMINI_API_KEY is required for embeddings. "
-                "Set it in your .env before uploading documents."
-            )
+        """Build a local sentence-transformers embedding function.
+
+        Uses :class:`langchain_huggingface.HuggingFaceEmbeddings`, which
+        downloads the model into the HuggingFace cache on first use and
+        runs entirely on the local CPU thereafter — no API key or
+        network round-trip per document.
+        """
         try:
-            from langchain_google_genai import GoogleGenerativeAIEmbeddings
+            from langchain_huggingface import HuggingFaceEmbeddings
         except ImportError as exc:  # pragma: no cover - dependency pinned in requirements
             raise VectorStoreError(
-                "langchain-google-genai is not installed; cannot build embeddings."
+                "langchain-huggingface is not installed; cannot build embeddings. "
+                "Install it with `pip install langchain-huggingface "
+                "sentence-transformers`."
             ) from exc
 
-        return GoogleGenerativeAIEmbeddings(
-            model=self.settings.embedding_model,
-            google_api_key=self.settings.gemini_api_key,
-        )
+        try:
+            return HuggingFaceEmbeddings(
+                model_name=self.settings.embedding_model,
+                # CPU is enough for MiniLM-class models. We keep encoding
+                # deterministic by disabling the progress bar.
+                encode_kwargs={"normalize_embeddings": True},
+                model_kwargs={"device": "cpu"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to load embedding model: %s", exc)
+            raise VectorStoreError(
+                f"Failed to load embedding model "
+                f"'{self.settings.embedding_model}': {exc}"
+            ) from exc
 
     @property
     def embeddings(self):  # noqa: ANN201

@@ -40,11 +40,25 @@ export function mapMessagesToPython(messages = []) {
 
 /**
  * Build the full JSON body sent to Python.
+ *
+ * @param {object}  args
+ * @param {Array}   args.messages       — chat history rows from MongoDB.
+ * @param {object} [args.context]       — extra fields to forward in `context`.
+ * @param {string} [args.activePdfId]   — RAG vector id, if a PDF is attached.
+ * @param {boolean}[args.useGemini]     — provider toggle. `false` (default)
+ *                                        routes to Groq; `true` routes to
+ *                                        Gemini with auto-fallback to Groq.
  */
-export function buildChatPayload({ messages, context = {}, activePdfId = null }) {
+export function buildChatPayload({
+  messages,
+  context = {},
+  activePdfId = null,
+  useGemini = false,
+}) {
   const payload = {
     messages: mapMessagesToPython(messages),
     context: { ...context },
+    use_gemini: Boolean(useGemini),
   };
   if (activePdfId && !payload.context.pdf_id) {
     payload.context.pdf_id = activePdfId;
@@ -131,8 +145,9 @@ export async function generateAIResponse({
   messages,
   context = {},
   activePdfId = null,
+  useGemini = false,
 } = {}) {
-  const payload = buildChatPayload({ messages, context, activePdfId });
+  const payload = buildChatPayload({ messages, context, activePdfId, useGemini });
 
   const response = await callWithRetry({
     method: "POST",
@@ -163,8 +178,9 @@ export async function streamAIResponse({
   messages,
   context = {},
   activePdfId = null,
+  useGemini = false,
 } = {}) {
-  const payload = buildChatPayload({ messages, context, activePdfId });
+  const payload = buildChatPayload({ messages, context, activePdfId, useGemini });
 
   const response = await callWithRetry({
     method: "POST",

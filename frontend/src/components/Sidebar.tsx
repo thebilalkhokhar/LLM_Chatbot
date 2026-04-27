@@ -13,10 +13,11 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/Button";
+import { EngineToggle } from "@/components/EngineToggle";
 import { Input } from "@/components/ui/Input";
 import { useAuth } from "@/context/AuthContext";
 import { cn, formatTime } from "@/lib/utils";
-import type { ChatSummary } from "@/types";
+import type { ChatSummary, EngineId } from "@/types";
 
 interface SidebarProps {
   chats: ChatSummary[];
@@ -27,6 +28,11 @@ interface SidebarProps {
   onNewChat: () => void;
   /** Optional — right-click / menu entry to delete a chat. */
   onDeleteChat?: (chatId: string) => void;
+  /** Active LLM toggle (Groq by default, Gemini when toggled). */
+  engine: EngineId;
+  onEngineChange: (next: EngineId) => void;
+  /** When true (e.g. mid-stream) the engine toggle is locked. */
+  engineLocked?: boolean;
 }
 
 export function Sidebar({
@@ -36,6 +42,9 @@ export function Sidebar({
   onSelectChat,
   onNewChat,
   onDeleteChat,
+  engine,
+  onEngineChange,
+  engineLocked = false,
 }: SidebarProps) {
   const { user, logout } = useAuth();
   const [query, setQuery] = useState("");
@@ -144,7 +153,27 @@ export function Sidebar({
         )}
       </nav>
 
-      <div className="border-t border-[var(--color-border)] px-3 py-3">
+      <div className="space-y-3 border-t border-[var(--color-border)] px-3 py-3">
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-fg-subtle)]">
+              Model engine
+            </span>
+            {engineLocked ? (
+              <span
+                className="text-[9px] uppercase tracking-wider text-[var(--color-fg-subtle)]"
+                title="Locked while a response is streaming"
+              >
+                Locked
+              </span>
+            ) : null}
+          </div>
+          <EngineToggle
+            value={engine}
+            onChange={onEngineChange}
+            disabled={engineLocked}
+          />
+        </div>
         <UserMenu
           username={user?.username ?? null}
           email={user?.email ?? null}

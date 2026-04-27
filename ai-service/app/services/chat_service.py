@@ -17,7 +17,6 @@ from typing import Any, Iterator
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from app.core.config import get_settings
 from app.graph.graph import get_graph
 from app.graph.nodes.chat_node import build_rag_system_message
 from app.graph.nodes.retriever_node import retriever_node
@@ -92,6 +91,7 @@ def process_chat(req: ChatRequest) -> ChatResponse:
         "messages": _to_lc_messages(req.messages),
         "next_step": "chat",
         "context": req.context or {},
+        "use_gemini": bool(req.use_gemini),
     }
 
     try:
@@ -128,30 +128,40 @@ def _friendly_llm_error(exc: Exception) -> tuple[str, str]:
         or "rate limit" in lowered
     ):
         return (
-            "Gemini's free-tier quota is exhausted for the day. "
-            "Please retry after the quota resets or upgrade your plan.",
-            "GEMINI_QUOTA_EXHAUSTED",
+            "All language-model providers hit a rate limit or quota. "
+            "Please retry shortly.",
+            "LLM_QUOTA_EXHAUSTED",
         )
     if "api key" in lowered or "api_key_invalid" in lowered or "401" in lowered:
         return (
-            "Gemini rejected the API key. Check GEMINI_API_KEY in ai-service/.env.",
-            "GEMINI_AUTH_FAILED",
+            "The configured API keys were rejected. Check GROQ_API_KEY and "
+            "GEMINI_API_KEY in ai-service/.env.",
+            "LLM_AUTH_FAILED",
         )
     return (
-        "I'm temporarily unable to reach the language model. Please try again shortly.",
+        "I'm temporarily unable to reach a language model. Please try again shortly.",
         "LLM_UNAVAILABLE",
     )
 
 
 def stream_chat(req: ChatRequest) -> Iterator[str]:
-    """Run one chat turn and yield NDJSON chunks as Gemini produces tokens.
+    """Run one chat turn and yield NDJSON chunks as the LLM produces tokens.
 
     Protocol (one JSON object per line):
 
-    - ``{"event": "start", "provider": "gemini", "model": "..."}``
+    - ``{"event": "start", "provider": "groq"|"gemini", "model": "..."}``
     - ``{"token": "..."}`` — zero or more, in generation order
     - ``{"event": "done", "next_step": "END"}`` on success
     - ``{"event": "error", "message": "..."}`` on failure (terminal)
+
+    The active provider is decided by ``req.use_gemini``:
+
+    * ``False`` (default) → Groq (``llama-3.3-70b-versatile``)
+    * ``True``            → Gemini (``gemini-2.5-flash-lite``)
+
+    If the preferred provider can't open a stream, :class:`LLMService`
+    transparently falls back to the other one. The ``start`` event
+    always reports the provider that *actually* answered.
 
     RAG behaviour matches the non-streaming path: if the request carries
     a ``pdf_id`` in ``context``, we run :func:`retriever_node` first and
@@ -159,14 +169,14 @@ def stream_chat(req: ChatRequest) -> Iterator[str]:
     uses. We bypass the compiled LangGraph for this path because LangGraph
     nodes cannot themselves yield tokens to the HTTP layer.
     """
-    settings = get_settings()
-    model_id = settings.gemini_model
+    use_gemini = bool(req.use_gemini)
 
     messages: list[BaseMessage] = _to_lc_messages(req.messages)
     state: dict[str, Any] = {
         "messages": messages,
         "next_step": "chat",
         "context": req.context or {},
+        "use_gemini": use_gemini,
     }
 
     try:
@@ -174,7 +184,9 @@ def stream_chat(req: ChatRequest) -> Iterator[str]:
         if diff:
             state.update(diff)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("stream_chat: retriever failed, continuing without RAG: %s", exc)
+        logger.exception(
+            "stream_chat: retriever failed, continuing without RAG: %s", exc
+        )
 
     final_messages: list[BaseMessage] = list(state["messages"])
     rag_system = build_rag_system_message(state.get("context") or {})
@@ -189,11 +201,25 @@ def stream_chat(req: ChatRequest) -> Iterator[str]:
         yield _ndjson({"event": "error", "message": message, "code": code})
         return
 
-    yield _ndjson({"event": "start", "provider": "gemini", "model": model_id})
+    try:
+        session = llm.start_stream(final_messages, use_gemini=use_gemini)
+    except LLMUnavailableError as exc:
+        message, code = _friendly_llm_error(exc)
+        logger.error("stream_chat: failed to open stream: %s", exc)
+        yield _ndjson({"event": "error", "message": message, "code": code})
+        return
+
+    yield _ndjson(
+        {
+            "event": "start",
+            "provider": session.provider,
+            "model": session.model,
+        }
+    )
 
     emitted_any = False
     try:
-        for token in llm.stream(final_messages):
+        for token in session.tokens:
             emitted_any = True
             yield _ndjson({"token": token})
     except LLMUnavailableError as exc:

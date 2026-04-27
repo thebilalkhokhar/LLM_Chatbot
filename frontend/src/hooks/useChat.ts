@@ -31,7 +31,8 @@ import {
   refreshAccessToken,
 } from "@/lib/api-client";
 import { parseSse } from "@/lib/sse";
-import type { Message } from "@/types";
+import type { EngineId, Message } from "@/types";
+import { DEFAULT_ENGINE } from "@/types";
 
 export interface ChatError {
   message: string;
@@ -46,6 +47,8 @@ export interface UseChatOptions {
   chatId?: string | null;
   /** Active RAG PDF id (mirrors the backend `active_pdf_id`). */
   activePdfId?: string | null;
+  /** LLM toggle. Defaults to Groq. */
+  engine?: EngineId;
   /** Called once the stream finishes successfully. */
   onDone?: (meta: {
     chatId: string | null;
@@ -78,6 +81,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
     initialMessages = [],
     chatId = null,
     activePdfId = null,
+    engine = DEFAULT_ENGINE,
     onDone,
   } = options;
 
@@ -89,6 +93,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   // re-creating `sendMessage` on every render.
   const chatIdRef = useRef(chatId);
   const pdfRef = useRef(activePdfId);
+  const engineRef = useRef<EngineId>(engine);
   const onDoneRef = useRef(onDone);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -98,6 +103,9 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
   useEffect(() => {
     pdfRef.current = activePdfId;
   }, [activePdfId]);
+  useEffect(() => {
+    engineRef.current = engine;
+  }, [engine]);
   useEffect(() => {
     onDoneRef.current = onDone;
   }, [onDone]);
@@ -159,6 +167,7 @@ export function useChat(options: UseChatOptions = {}): UseChatReturn {
         content: trimmed,
         chatId: chatIdRef.current ?? undefined,
         pdf_id: pdfRef.current ?? undefined,
+        use_gemini: engineRef.current === "gemini",
       });
 
       const buildInit = (token: string | null): RequestInit => ({

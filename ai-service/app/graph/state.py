@@ -26,3 +26,6 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[list[BaseMessage], add_messages]
     next_step: str
     context: dict[str, Any]
+    # Provider toggle: ``False`` (default) → Groq, ``True`` → Gemini.
+    # Auto-fallback still applies when the preferred provider is down.
+    use_gemini: bool

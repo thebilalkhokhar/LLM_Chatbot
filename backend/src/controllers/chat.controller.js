@@ -62,7 +62,14 @@ function assertMessagePayload(body) {
       : typeof context.pdf_id === "string"
         ? context.pdf_id
         : null;
-  return { content, context, chatId, pdfId };
+  // Provider toggle. Defaults to Groq when not specified. Accept the flag
+  // under either `use_gemini` (snake_case, matches Python) or `useGemini`.
+  const useGeminiRaw = body.use_gemini ?? body.useGemini;
+  const useGemini =
+    useGeminiRaw === true ||
+    useGeminiRaw === "true" ||
+    useGeminiRaw === 1;
+  return { content, context, chatId, pdfId, useGemini };
 }
 
 async function loadOrCreateChat({ chatId, userId, firstMessageContent, pdfId }) {
@@ -103,7 +110,9 @@ function writeSse(res, event, data) {
  * Response: `text/event-stream`
  */
 export async function sendMessage(req, res) {
-  const { content, context, chatId, pdfId } = assertMessagePayload(req.body ?? {});
+  const { content, context, chatId, pdfId, useGemini } = assertMessagePayload(
+    req.body ?? {}
+  );
 
   const chat = await loadOrCreateChat({
     chatId,
@@ -134,6 +143,7 @@ export async function sendMessage(req, res) {
       messages: chat.messages,
       context: userMessage.context,
       activePdfId: chat.active_pdf_id,
+      useGemini,
     });
   } catch (error) {
     writeSse(res, SSE_EVENTS.ERROR, {

@@ -10,6 +10,19 @@
 
 export type MessageRole = "system" | "user" | "assistant";
 
+/**
+ * Which LLM the user has selected for this chat.
+ *
+ * - ``"groq"``   → default. ``llama-3.3-70b-versatile`` via Groq Cloud.
+ * - ``"gemini"`` → Google Gemini (``gemini-2.5-flash-lite``).
+ *
+ * The Python service auto-falls-back to the other provider if the
+ * preferred one is unreachable.
+ */
+export type EngineId = "groq" | "gemini";
+
+export const DEFAULT_ENGINE: EngineId = "groq";
+
 export interface User {
   id: string;
   email: string;

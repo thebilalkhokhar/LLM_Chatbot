@@ -38,13 +38,25 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Gemini (chat + embeddings) ---
+    # --- Groq (default chat provider) ---
+    groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    groq_model: str = Field(
+        default="llama-3.3-70b-versatile", alias="GROQ_MODEL"
+    )
+
+    # --- Gemini (toggle via `use_gemini` on the request body) ---
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
-    gemini_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_MODEL")
-    # Older embedding IDs (`embedding-001`, `text-embedding-004`) have been
-    # retired on v1beta. `models/gemini-embedding-001` is the current default.
+    gemini_model: str = Field(
+        default="gemini-2.5-flash-lite", alias="GEMINI_MODEL"
+    )
+
+    # --- Embeddings (stable, local, free) ---
+    # We deliberately use a *local* sentence-transformers model so vectors
+    # stay deterministic across runs and we never get bitten by Google's
+    # rotating embedding model IDs.
     embedding_model: str = Field(
-        default="models/gemini-embedding-001", alias="EMBEDDING_MODEL"
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        alias="EMBEDDING_MODEL",
     )
 
     # --- Runtime ---

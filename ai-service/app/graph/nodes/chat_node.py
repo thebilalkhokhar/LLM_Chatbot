@@ -82,9 +82,10 @@ def chat_node(state: AgentState) -> dict[str, Any]:
         logger.debug("chat_node: injecting RAG context into system prompt.")
         messages = [rag_system, *messages]
 
+    use_gemini = bool(state.get("use_gemini", False))
     llm = get_llm_service()
     try:
-        reply = llm.invoke(messages)
+        reply = llm.invoke(messages, use_gemini=use_gemini)
     except LLMUnavailableError as exc:
         logger.error("LLM unavailable: %s", exc)
         reply = AIMessage(content=_format_unavailable_message(exc))
@@ -102,15 +103,15 @@ def _format_unavailable_message(exc: Exception) -> str:
         or "rate limit" in lowered
     ):
         return (
-            "Gemini's free-tier quota is exhausted for the day. "
-            "Please retry after the quota resets or upgrade your plan."
+            "All language-model providers hit a rate limit or quota. "
+            "Please retry shortly."
         )
     if "api key" in lowered or "api_key_invalid" in lowered or "401" in lowered:
         return (
-            "Gemini rejected the API key. Check GEMINI_API_KEY in "
-            "ai-service/.env."
+            "The configured API keys were rejected. Check GROQ_API_KEY "
+            "and GEMINI_API_KEY in ai-service/.env."
         )
     return (
-        "I'm temporarily unable to reach the language model. "
+        "I'm temporarily unable to reach a language model. "
         "Please try again shortly."
     )

@@ -28,6 +28,14 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional RAG / metadata context forwarded to the graph state.",
     )
+    use_gemini: bool = Field(
+        default=False,
+        description=(
+            "If `true`, route this turn to Google Gemini. Otherwise the "
+            "default Groq backend is used. The service auto-falls-back "
+            "to the other provider if the preferred one is unreachable."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):
@@ -36,7 +44,7 @@ class ChatResponse(BaseModel):
     reply: str = Field(..., description="Assistant reply text.")
     provider: str | None = Field(
         default=None,
-        description="LLM provider that produced the reply (currently 'gemini').",
+        description="LLM provider that produced the reply ('groq' or 'gemini').",
     )
     model: str | None = Field(
         default=None, description="Concrete model id used for the reply."

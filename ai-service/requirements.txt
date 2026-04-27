@@ -8,6 +8,13 @@ langchain-core==0.3.29
 langchain-community==0.3.14
 langchain-text-splitters==0.3.5
 langchain-google-genai==2.0.8
+# Groq (default chat provider; very fast inference)
+langchain-groq==0.2.2
+# HuggingFace integration — only used for *local* sentence-transformers
+# embeddings (no Inference API hit, no API key needed at runtime).
+langchain-huggingface==0.1.2
+# Local embeddings backend (`all-MiniLM-L6-v2`).
+sentence-transformers==3.3.1
 
 # --- RAG: PDF loader + FAISS vector store ---
 pypdf==5.1.0
