@@ -1,0 +1,14 @@
+{
+    "python.envFile": "${workspaceFolder}/.env",
+    "python.terminal.useEnvFile": true,
+    "python.terminal.executeIn": "integrated",
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateCommand": "conda activate",
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "terminal.integrated.profiles.windows": {
+        "PowerShell": {
+            "source": "PowerShell",
+            "icon": "terminal-powershell"
+        }
+    }
+}
