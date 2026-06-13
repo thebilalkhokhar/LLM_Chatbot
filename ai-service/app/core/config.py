@@ -64,24 +64,22 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # --- Storage (vector indices, uploads, etc.) ---
-    # Overridable via env but defaults to <service_root>/storage/vectors.
+    # Legacy disk path — kept for local development fallback; not used by
+    # Pinecone-backed deployments.
     vector_store_dir: str = Field(
         default_factory=lambda: str(_SERVICE_ROOT / "storage" / "vectors"),
         alias="VECTOR_STORE_DIR",
     )
 
-    @property
-    def vector_store_path(self) -> Path:
-        """Return :attr:`vector_store_dir` as an absolute :class:`~pathlib.Path`."""
-        return Path(self.vector_store_dir).expanduser().resolve()
+    # --- Pinecone (cloud vector database) ---
+    pinecone_api_key: str | None = Field(default=None, alias="PINECONE_API_KEY")
+    pinecone_host: str | None = Field(default=None, alias="PINECONE_HOST")
+    pinecone_index_name: str = Field(default="llm-chatbot", alias="PINECONE_INDEX_NAME")
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
-
-    # Make sure the vector-store root exists before any node tries to write.
-    settings.vector_store_path.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
         level=settings.log_level.upper(),

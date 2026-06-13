@@ -52,7 +52,7 @@ def ingest_pdf(
     filename: str | None = None,
     manager: VectorStoreManager | None = None,
 ) -> IngestionResult:
-    """Ingest a PDF on disk into a FAISS vector store.
+    """Ingest a PDF on disk into a Pinecone vector store namespace.
 
     Parameters
     ----------
@@ -112,7 +112,7 @@ def ingest_pdf(
     mgr = manager or get_vector_store_manager()
 
     try:
-        storage_path = mgr.save_vector_store(chunks, vector_id)
+        result_id = mgr.save_vector_store(chunks, vector_id)
     except VectorStoreError as exc:
         raise PdfIngestionError(str(exc)) from exc
 
@@ -129,5 +129,5 @@ def ingest_pdf(
         filename=source_name,
         documents=len(docs),
         chunks=len(chunks),
-        storage_path=str(storage_path),
+        storage_path=result_id,
     )

@@ -1,4 +1,4 @@
-"""Retrieval-Augmented Generation helpers: PDF ingestion + FAISS storage."""
+"""Retrieval-Augmented Generation helpers: PDF ingestion + Pinecone storage."""
 
 from app.rag.ingest import PdfIngestionError, ingest_pdf
 from app.rag.vector_store import VectorStoreManager, get_vector_store_manager
