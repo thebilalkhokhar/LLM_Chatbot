@@ -80,3 +80,7 @@ export function createApp() {
 
   return app;
 }
+
+// Vercel loads this module and requires the Express app as the default export.
+const app = createApp();
+export default app;
