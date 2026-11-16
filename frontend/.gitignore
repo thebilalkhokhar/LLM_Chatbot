@@ -19,6 +19,7 @@ build/
 !.env.local.example
 
 # --- Editor / OS ---
+.vercel/
 .vscode/
 .idea/
 .DS_Store

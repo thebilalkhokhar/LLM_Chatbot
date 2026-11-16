@@ -2,9 +2,8 @@
  * Express application factory.
  *
  * Wires up middleware, routers, and the centralised error handler.
- * Keep this file free of "listen" / "connect" side effects — those
- * live in `server.js` so tests can import the app without booting a
- * socket or the database.
+ * Listening stays in `server.js`. Database connect is lazy so a Vercel
+ * cold start can serve `/health` without opening Mongo first.
  */
 
 import express from "express";
@@ -14,6 +13,7 @@ import morgan from "morgan";
 import cookieParser from "cookie-parser";
 
 import { env } from "./config/env.js";
+import { connectDatabase } from "./config/database.js";
 import authRoutes from "./routes/auth.routes.js";
 import chatRoutes from "./routes/chat.routes.js";
 import {
@@ -27,7 +27,23 @@ export function createApp() {
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
 
-  app.use(helmet());
+  // The UI is hosted on a different origin, so the API must be readable
+  // cross-origin. Helmet's default CORP of `same-origin` blocks that.
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+    })
+  );
+
+  app.use(async (req, res, next) => {
+    if (req.path === "/health") return next();
+    try {
+      await connectDatabase();
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
   app.use(
     cors({
       origin(origin, cb) {

@@ -11,20 +11,12 @@ import { env } from "./env.js";
 
 mongoose.set("strictQuery", true);
 
-export async function connectDatabase() {
-  try {
-    const connection = await mongoose.connect(env.mongoUri, {
-      serverSelectionTimeoutMS: 10_000,
-    });
-    // eslint-disable-next-line no-console
-    console.log(
-      `[db] MongoDB connected: ${connection.connection.host}/${connection.connection.name}`
-    );
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error("[db] MongoDB connection failed:", error.message);
-    throw error;
-  }
+let connectPromise = null;
+let listenersBound = false;
+
+function bindListeners() {
+  if (listenersBound) return;
+  listenersBound = true;
 
   mongoose.connection.on("disconnected", () => {
     // eslint-disable-next-line no-console
@@ -40,6 +32,35 @@ export async function connectDatabase() {
     // eslint-disable-next-line no-console
     console.error("[db] MongoDB error:", err.message);
   });
+}
+
+export function connectDatabase() {
+  if (!env.mongoUri) {
+    return Promise.reject(new Error("MONGO_URI is not set."));
+  }
+  if (mongoose.connection.readyState === 1) {
+    return Promise.resolve(mongoose.connection);
+  }
+  if (connectPromise) return connectPromise;
+
+  bindListeners();
+  connectPromise = mongoose
+    .connect(env.mongoUri, { serverSelectionTimeoutMS: 10_000 })
+    .then((connection) => {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[db] MongoDB connected: ${connection.connection.host}/${connection.connection.name}`
+      );
+      return connection;
+    })
+    .catch((error) => {
+      connectPromise = null;
+      // eslint-disable-next-line no-console
+      console.error("[db] MongoDB connection failed:", error.message);
+      throw error;
+    });
+
+  return connectPromise;
 }
 
 export async function disconnectDatabase() {

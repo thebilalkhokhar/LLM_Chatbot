@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Express.js gateway for the LangGraph-powered AI service. Handles auth and proxies chat to the Python ai-service over SSE.",
   "type": "module",
-  "main": "src/server.js",
+  "main": "index.js",
   "engines": {
     "node": ">=18.0.0"
   },

@@ -22,7 +22,10 @@ const REQUIRED_KEYS = [
 ];
 
 const missing = REQUIRED_KEYS.filter((key) => !process.env[key]);
-if (missing.length) {
+if (missing.length && !process.env.VERCEL) {
+  // Local `node src/server.js` should fail fast. On Vercel the same
+  // module is imported during the build, before runtime env is applied,
+  // so exiting here would fail the deployment.
   // eslint-disable-next-line no-console
   console.error(
     `[config] Missing required env vars: ${missing.join(", ")}\n` +

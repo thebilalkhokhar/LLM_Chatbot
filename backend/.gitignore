@@ -12,6 +12,7 @@ coverage/
 dist/
 .nyc_output/
 
+.vercel/
 .vscode/
 .idea/
 .DS_Store
