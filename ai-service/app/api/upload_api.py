@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB hard cap for uploads
+# Vercel Hobby rejects request bodies above 4.5 MB before they reach the app.
+_MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 
 
 def _save_to_temp(contents: bytes, suffix: str) -> Path:

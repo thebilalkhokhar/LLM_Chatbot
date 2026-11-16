@@ -24,8 +24,8 @@ def create_app() -> FastAPI:
         title="AI Service",
         version="0.2.0",
         description=(
-            "LangGraph-powered LLM service using Google Gemini, with a "
-            "PDF-based RAG pipeline (FAISS + Google embeddings)."
+            "LangGraph-powered LLM service (Groq / Gemini) with a "
+            "PDF RAG pipeline (FastEmbed ONNX + Pinecone)."
         ),
         debug=settings.app_env == "development",
     )

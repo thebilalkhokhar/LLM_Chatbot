@@ -34,3 +34,5 @@ ai-service/storage/
 *.log
 
 storage
+.cache/
+.vercel/

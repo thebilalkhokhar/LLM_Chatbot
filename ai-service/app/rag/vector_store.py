@@ -2,8 +2,8 @@
 
 Responsible for:
 
-* constructing an embedding function (local sentence-transformers
-  model — by default ``sentence-transformers/all-MiniLM-L6-v2``),
+* constructing an embedding function (local FastEmbed ONNX model —
+  by default ``sentence-transformers/all-MiniLM-L6-v2``, 384-d, no PyTorch),
 * upserting document vectors into a Pinecone index under a per-document
   *namespace* (so each uploaded PDF is isolated),
 * running similarity queries against Pinecone and returning results as
@@ -25,14 +25,18 @@ Why direct pinecone client (no langchain-pinecone)?
 
 Why local embeddings?
     Google's hosted embedding models keep getting rotated/retired.
-    A local sentence-transformers model gives us deterministic 384-d
-    vectors, zero API cost, and offline reproducibility once cached.
+    FastEmbed runs the same MiniLM weights as ONNX Runtime, so we keep
+    deterministic 384-d vectors and zero API cost without loading PyTorch.
+    The model is downloaded once into a writable cache (``/tmp`` on Vercel).
 """
 
 from __future__ import annotations
 
 import logging
+import math
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Sequence
 
 from langchain_core.documents import Document
@@ -42,6 +46,96 @@ from app.core.config import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 _UPSERT_BATCH = 100  # Pinecone recommends batches of ≤100 vectors
+
+
+def _unit_vector(values: Sequence[float]) -> list[float]:
+    """L2-normalize so cosine search matches the previous embedding setup."""
+    coords = [float(value) for value in values]
+    norm = math.sqrt(sum(value * value for value in coords))
+    if norm == 0.0:
+        return coords
+    return [value / norm for value in coords]
+
+
+def _embedding_cache_dir(settings: Settings) -> str:
+    """Return a writable directory for the ONNX model.
+
+    Vercel functions can only write to ``/tmp``. Local runs use
+    ``ai-service/.cache/fastembed`` unless ``FASTEMBED_CACHE_PATH`` is set.
+    """
+    configured = (settings.embedding_cache_dir or "").strip()
+    if configured:
+        path = configured
+    elif os.environ.get("VERCEL"):
+        path = "/tmp/fastembed"
+    else:
+        path = str(Path(__file__).resolve().parents[2] / ".cache" / "fastembed")
+    Path(path).mkdir(parents=True, exist_ok=True)
+    return path
+
+
+class _FastEmbedAdapter:
+    """Small wrapper so the rest of the store can call LangChain-style methods.
+
+    The ONNX model is constructed on first use, not at import time, so
+    ``/health`` and plain chat do not pay the model RAM cost.
+    """
+
+    def __init__(self, model_name: str, cache_dir: str) -> None:
+        self._model_name = model_name
+        self._cache_dir = cache_dir
+        self._model = None
+
+    def _load(self):  # noqa: ANN202
+        if self._model is not None:
+            return self._model
+
+        # Hugging Face / FastEmbed must not touch a read-only home directory.
+        os.environ.setdefault("FASTEMBED_CACHE_PATH", self._cache_dir)
+        os.environ.setdefault("HF_HOME", self._cache_dir)
+        os.environ.setdefault(
+            "HUGGINGFACE_HUB_CACHE", str(Path(self._cache_dir) / "hub")
+        )
+
+        try:
+            from fastembed import TextEmbedding
+        except ImportError as exc:  # pragma: no cover
+            raise VectorStoreError(
+                "fastembed is not installed. "
+                "Run `pip install \"fastembed>=0.4.0\"`."
+            ) from exc
+
+        try:
+            # CPU-only. threads=1 keeps the ONNX session inside the Hobby RAM cap.
+            self._model = TextEmbedding(
+                model_name=self._model_name,
+                cache_dir=self._cache_dir,
+                threads=1,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to load FastEmbed model: %s", exc)
+            raise VectorStoreError(
+                f"Failed to load embedding model '{self._model_name}': {exc}"
+            ) from exc
+        logger.info(
+            "Loaded FastEmbed ONNX model '%s' (cache: %s)",
+            self._model_name,
+            self._cache_dir,
+        )
+        return self._model
+
+    def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed a batch of document chunks."""
+        if not texts:
+            return []
+        model = self._load()
+        return [_unit_vector(vector) for vector in model.embed(list(texts))]
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a single search query."""
+        model = self._load()
+        vector = next(model.embed([text]))
+        return _unit_vector(vector)
 
 
 class VectorStoreError(RuntimeError):
@@ -89,7 +183,11 @@ class VectorStoreManager:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
-        self._embeddings = self._build_embeddings()
+        # Adapter is cheap; the ONNX session is created on the first embed.
+        self._embeddings = _FastEmbedAdapter(
+            model_name=self.settings.embedding_model,
+            cache_dir=_embedding_cache_dir(self.settings),
+        )
         self._validate_pinecone_config()
 
     # ------------------------------------------------------------------ #
@@ -106,31 +204,9 @@ class VectorStoreManager:
     # ------------------------------------------------------------------ #
     # Embeddings
     # ------------------------------------------------------------------ #
-    def _build_embeddings(self):  # noqa: ANN202
-        """Build a local sentence-transformers embedding function."""
-        try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-        except ImportError as exc:  # pragma: no cover
-            raise VectorStoreError(
-                "langchain-huggingface is not installed. "
-                "Run `pip install langchain-huggingface sentence-transformers`."
-            ) from exc
-
-        try:
-            return HuggingFaceEmbeddings(
-                model_name=self.settings.embedding_model,
-                encode_kwargs={"normalize_embeddings": True},
-                model_kwargs={"device": "cpu"},
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to load embedding model: %s", exc)
-            raise VectorStoreError(
-                f"Failed to load embedding model '{self.settings.embedding_model}': {exc}"
-            ) from exc
-
     @property
     def embeddings(self):  # noqa: ANN201
-        """Expose the underlying embedding function for advanced callers."""
+        """Expose the FastEmbed adapter for advanced callers."""
         return self._embeddings
 
     # ------------------------------------------------------------------ #

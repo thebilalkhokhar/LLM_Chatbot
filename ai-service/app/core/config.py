@@ -50,14 +50,16 @@ class Settings(BaseSettings):
         default="gemini-2.5-flash-lite", alias="GEMINI_MODEL"
     )
 
-    # --- Embeddings (stable, local, free) ---
-    # We deliberately use a *local* sentence-transformers model so vectors
-    # stay deterministic across runs and we never get bitten by Google's
-    # rotating embedding model IDs.
+    # --- Embeddings (local ONNX via FastEmbed — no PyTorch) ---
+    # FastEmbed ships an ONNX build of MiniLM (384-d). Same vector size as
+    # the old sentence-transformers model, so the Pinecone index dimension
+    # stays valid. Re-upload PDFs after this switch; ONNX vectors are not
+    # identical to the old PyTorch vectors.
     embedding_model: str = Field(
         default="sentence-transformers/all-MiniLM-L6-v2",
         alias="EMBEDDING_MODEL",
     )
+    embedding_cache_dir: str = Field(default="", alias="FASTEMBED_CACHE_PATH")
 
     # --- Runtime ---
     app_env: str = Field(default="development", alias="APP_ENV")

@@ -25,7 +25,12 @@ router = APIRouter()
 def health() -> dict[str, str]:
     """Liveness probe."""
     settings = get_settings()
-    return {"status": "ok", "env": settings.app_env}
+    return {
+        "status": "ok",
+        "env": settings.app_env,
+        "embeddings": "fastembed",
+        "embedding_model": settings.embedding_model,
+    }
 
 
 @router.post(
