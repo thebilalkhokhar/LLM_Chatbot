@@ -35,15 +35,6 @@ export function createApp() {
     })
   );
 
-  app.use(async (req, res, next) => {
-    if (req.path === "/health") return next();
-    try {
-      await connectDatabase();
-      next();
-    } catch (error) {
-      next(error);
-    }
-  });
   app.use(
     cors({
       origin(origin, cb) {
@@ -61,6 +52,17 @@ export function createApp() {
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: true, limit: "1mb" }));
   app.use(cookieParser());
+
+  // After CORS so a browser preflight is answered even if Mongo is down.
+  app.use(async (req, res, next) => {
+    if (req.path === "/health" || req.method === "OPTIONS") return next();
+    try {
+      await connectDatabase();
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
 
   if (env.nodeEnv !== "test") {
     app.use(morgan(env.isProduction ? "combined" : "dev"));
